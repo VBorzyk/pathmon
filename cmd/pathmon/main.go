@@ -3,19 +3,17 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
+
+	"github.com/VBorzyk/pathmon/internal/probe"
 )
 
-// version подставляется при сборке через -ldflags (см. Makefile).
-// Если собрать обычной командой go build, останется значение "dev".
+// version is injected at build time via -ldflags (see Makefile).
 var version = "dev"
 
 func main() {
-	// os.Args — срез строк с аргументами командной строки.
-	// os.Args[0] — это всегда путь к самой программе.
-	// Значит первый аргумент пользователя лежит в os.Args[1].
-	//
-	// Если пользователь набрал просто "pathmon", длина среза равна 1,
-	// команды нет — печатаем справку и выходим с кодом 2.
+	// os.Args[0] is always the program path, so the first user argument
+	// lives at index 1. Without this guard, indexing panics.
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(2)
@@ -31,10 +29,8 @@ func main() {
 	case "help":
 		printUsage()
 	default:
-		// Fprintf, а не Printf: пишем в os.Stderr — поток ошибок.
-		// Это важно: если пользователь перенаправит вывод в файл
-		// (pathmon watch > log.txt), сообщения об ошибках всё равно
-		// останутся видны на экране.
+		// Errors go to stderr so they stay visible even when stdout
+		// is redirected to a file.
 		fmt.Fprintf(os.Stderr, "pathmon: unknown command %q\n\n", command)
 		printUsage()
 		os.Exit(2)
@@ -47,13 +43,23 @@ func printUsage() {
 Usage:
   pathmon <command>
 
-Команды:
+Commands:
   watch     run continuous monitoring
   version   print version information
   help      show this help`)
 }
 
-// runWatch пока заглушка. Наполним её 24 августа.
+// runWatch currently probes a single hardcoded target once.
+// The target list moves into a config file next.
 func runWatch() {
-	fmt.Println("watch: not implemented yet")
+	const address = "1.1.1.1:443"
+	const timeout = 2 * time.Second
+
+	elapsed, err := probe.TCPConnect(address, timeout)
+	if err != nil {
+		fmt.Printf("%-22s FAIL  %v\n", address, err)
+		return
+	}
+
+	fmt.Printf("%-22s OK    connect %v\n", address, elapsed.Round(time.Millisecond))
 }
