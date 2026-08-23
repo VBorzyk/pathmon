@@ -1,0 +1,20 @@
+# Tag added to every alert, so you can tell observers apart.
+# Defaults to the machine hostname.
+host_id: observer-1
+
+# Pause between probe rounds.
+interval: 60s
+
+# How long a single connection attempt may take.
+# Must be shorter than interval.
+timeout: 2s
+
+targets:
+  # Your VPN endpoint.
+  - host: my-vpn.example.com
+    port: 443
+
+  # An anchor: a well-known host used as a control.
+  # If the anchor fails too, the problem is on the observer side.
+  - host: 1.1.1.1
+    port: 443

@@ -1,5 +1,3 @@
-// Package probe provides network probes: ways to check whether a target
-// is reachable and how long that takes.
 package probe
 
 import (

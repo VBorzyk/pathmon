@@ -5,6 +5,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/VBorzyk/pathmon/internal/config"
 	"github.com/VBorzyk/pathmon/internal/probe"
 )
 
@@ -20,10 +21,14 @@ func main() {
 	}
 
 	command := os.Args[1]
+	args := os.Args[2:]
 
 	switch command {
 	case "watch":
-		runWatch()
+		if err := runWatch(args); err != nil {
+			fmt.Fprintln(os.Stderr, "pathmon:", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Println("pathmon", version)
 	case "help":
@@ -41,25 +46,43 @@ func printUsage() {
 	fmt.Println(`pathmon monitors host reachability and reports problems.
 
 Usage:
-  pathmon <command>
+  pathmon <command> [config-path]
 
 Commands:
   watch     run continuous monitoring
   version   print version information
-  help      show this help`)
+  help      show this help
+
+The config path defaults to ./pathmon.yaml.`)
 }
 
-// runWatch currently probes a single hardcoded target once.
-// The target list moves into a config file next.
-func runWatch() {
-	const address = "1.1.1.1:443"
-	const timeout = 2 * time.Second
-
-	elapsed, err := probe.TCPConnect(address, timeout)
-	if err != nil {
-		fmt.Printf("%-22s FAIL  %v\n", address, err)
-		return
+// runWatch probes every configured target once. The repeating loop
+// comes next.
+func runWatch(args []string) error {
+	path := config.DefaultPath
+	if len(args) > 0 {
+		path = args[0]
 	}
 
-	fmt.Printf("%-22s OK    connect %v\n", address, elapsed.Round(time.Millisecond))
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("host_id=%s interval=%v timeout=%v targets=%d\n\n",
+		cfg.HostID, cfg.Interval, cfg.Timeout, len(cfg.Targets))
+
+	for _, target := range cfg.Targets {
+		address := target.Address()
+
+		elapsed, err := probe.TCPConnect(address, cfg.Timeout)
+		if err != nil {
+			fmt.Printf("%-24s FAIL  %v\n", address, err)
+			continue
+		}
+
+		fmt.Printf("%-24s OK    connect %v\n", address, elapsed.Round(time.Millisecond))
+	}
+
+	return nil
 }
