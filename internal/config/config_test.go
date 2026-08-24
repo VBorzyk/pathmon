@@ -30,6 +30,9 @@ targets:
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if cfg.HostID != "observer-1" {
+		t.Errorf("host_id: got %q, want %q", cfg.HostID, "observer-1")
+	}
 
 	if cfg.Interval != 60*time.Second {
 		t.Errorf("interval: got %v, want 60s", cfg.Interval)
