@@ -74,7 +74,7 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	if err := validate(cfg); err != nil {
+	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
 
@@ -83,7 +83,10 @@ func Load(path string) (Config, error) {
 
 // validate rejects configurations that would make the watcher useless
 // or crash it later, and says exactly what is wrong.
-func validate(cfg Config) error {
+//
+// Load calls it on every config it returns. It is exported because a command
+// line flag can override a field after loading and break an invariant again.
+func (cfg Config) Validate() error {
 	if cfg.Interval <= 0 {
 		return fmt.Errorf("interval must be positive, got %v", cfg.Interval)
 	}
