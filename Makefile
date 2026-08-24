@@ -1,14 +1,14 @@
-# Имя итогового бинарника и путь к пакету с функцией main.
+# Name of the resulting binary and the path to the package holding func main.
 BINARY := pathmon
 PKG    := ./cmd/pathmon
 
-# Версия берётся из git-тега. Если тегов ещё нет — будет "dev".
+# The version comes from the git tag. With no tags yet it falls back to "dev".
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-# Цель по умолчанию: сработает, если набрать просто "make".
+# Default goal: what plain "make" runs.
 .DEFAULT_GOAL := build
 
-# .PHONY говорит make, что build — это не имя файла, а имя действия.
+# .PHONY tells make that these are actions, not file names.
 .PHONY: build
 build:
 	go build -ldflags "-X main.version=$(VERSION)" -o bin/$(BINARY) $(PKG)
