@@ -15,14 +15,14 @@ jobs:
         with:
           go-version: "1.24.x"
 
-      - name: Проверка форматирования
+      - name: Check formatting
         run: test -z "$(gofmt -l .)"
 
-      - name: Статический анализ
+      - name: Vet
         run: go vet ./...
 
-      - name: Тесты
+      - name: Test
         run: go test ./...
 
-      - name: Сборка
+      - name: Build
         run: go build ./...

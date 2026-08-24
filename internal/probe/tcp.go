@@ -5,9 +5,11 @@ import (
 	"time"
 )
 
-// TCPConnect establishes a TCP connection to address ("host:port")
-// and reports how long the handshake took.
-//
+/* TCPConnect establishes a TCP connection to address ("host:port") and
+reports how long that took. When address holds a name rather than an IP,
+the measurement also covers the DNS lookup, because net.DialTimeout does
+both under one deadline.
+*/
 // On failure it returns a zero duration and the underlying error.
 func TCPConnect(address string, timeout time.Duration) (time.Duration, error) {
 	start := time.Now()
