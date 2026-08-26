@@ -10,6 +10,7 @@ import (
 
 	"github.com/VBorzyk/pathmon/internal/config"
 	"github.com/VBorzyk/pathmon/internal/probe"
+	"github.com/VBorzyk/pathmon/internal/state"
 )
 
 // version is injected at build time via -ldflags (see Makefile).
@@ -107,8 +108,12 @@ func runWatch(args []string) error {
 	fmt.Printf("pathmon %s | host_id=%s | targets=%d | interval=%v\n\n",
 		version, cfg.HostID, len(cfg.Targets), cfg.Interval)
 
+	// One history per target address, kept for the whole run. The map
+	// starts empty: a missing key reads as a zero History, which is valid.
+	histories := make(map[string]state.History)
+
 	if once {
-		runRound(cfg)
+		runRound(cfg, histories)
 		return nil
 	}
 
@@ -117,7 +122,7 @@ func runWatch(args []string) error {
 	// every cycle, so a 60s interval would slowly drift to 62s, 64s, ...
 	next := time.Now()
 	for {
-		runRound(cfg)
+		runRound(cfg, histories)
 
 		next = next.Add(cfg.Interval)
 		wait := time.Until(next)
@@ -131,20 +136,34 @@ func runWatch(args []string) error {
 	}
 }
 
-// runRound probes every target once and prints one line per target.
-// One timestamp is taken for the whole round, so all its lines line up.
-func runRound(cfg config.Config) {
+// runRound probes every target once, updates its history and prints one
+// line per target. One timestamp is taken for the whole round, so all its
+// lines line up.
+func runRound(cfg config.Config, histories map[string]state.History) {
 	stamp := time.Now().Format("15:04:05")
 
 	for _, target := range cfg.Targets {
 		address := target.Address()
 
 		elapsed, err := probe.TCPConnect(address, cfg.Timeout)
+		status := probe.Classify(err)
+
+		// Maps hand out copies of their values, so the updated history
+		// has to be written back under the same key.
+		h := histories[address]
+		h = h.Add(state.Sample{Status: status, Elapsed: elapsed})
+		histories[address] = h
+
+		lost, total := h.Loss()
+
+		// On success the interesting detail is the connect time,
+		// on failure it is the error text.
+		detail := elapsed.Round(time.Microsecond).String()
 		if err != nil {
-			fmt.Printf("%s  %-24s FAIL  %v\n", stamp, address, err)
-			continue
+			detail = err.Error()
 		}
 
-		fmt.Printf("%s  %-24s OK    %v\n", stamp, address, elapsed.Round(time.Microsecond))
+		fmt.Printf("%s  %-24s %-8s streak=%-3d loss=%d/%-3d %s\n",
+			stamp, address, status, h.Streak, lost, total, detail)
 	}
 }
