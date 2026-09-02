@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/VBorzyk/pathmon/internal/config"
+	"github.com/VBorzyk/pathmon/internal/detect"
 	"github.com/VBorzyk/pathmon/internal/probe"
 	"github.com/VBorzyk/pathmon/internal/state"
 )
@@ -111,9 +112,12 @@ func runWatch(args []string) error {
 	// One history per target address, kept for the whole run. The map
 	// starts empty: a missing key reads as a zero History, which is valid.
 	histories := make(map[string]state.History)
+	// The detector lives as long as the loop: it has to remember which
+	// incidents are already reported to avoid repeating them every round.
+	detector := detect.New()
 
 	if once {
-		runRound(cfg, histories)
+		runRound(cfg, histories, detector)
 		return nil
 	}
 
@@ -122,7 +126,7 @@ func runWatch(args []string) error {
 	// every cycle, so a 60s interval would slowly drift to 62s, 64s, ...
 	next := time.Now()
 	for {
-		runRound(cfg, histories)
+		runRound(cfg, histories, detector)
 
 		next = next.Add(cfg.Interval)
 		wait := time.Until(next)
@@ -139,7 +143,7 @@ func runWatch(args []string) error {
 // runRound probes every target once, updates its history and prints one
 // line per target. One timestamp is taken for the whole round, so all its
 // lines line up.
-func runRound(cfg config.Config, histories map[string]state.History) {
+func runRound(cfg config.Config, histories map[string]state.History, detector *detect.Detector) {
 	stamp := time.Now().Format("15:04:05")
 
 	for _, target := range cfg.Targets {
@@ -165,5 +169,13 @@ func runRound(cfg config.Config, histories map[string]state.History) {
 
 		fmt.Printf("%s  %-24s %-8s streak=%-3d loss=%d/%-3d %s\n",
 			stamp, address, status, h.Streak, lost, total, detail)
+
+		// Detected events get their own marked line right under the
+		// probe that triggered them; tomorrow the same events also go
+		// to Telegram.
+		if event := detector.Check(address, h); event != nil {
+			fmt.Printf("%s  %-24s !! %s: %s\n",
+				stamp, address, event.Type, event.Detail)
+		}
 	}
 }

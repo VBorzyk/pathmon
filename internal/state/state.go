@@ -15,7 +15,7 @@ const WindowSize = 10
 // Sample is the outcome of one probe of one target.
 type Sample struct {
 	Status  probe.Status
-	Elapsed time.Duration // meaningful only when Status is probe.StatusOK
+	Elapsed time.Duration // how long the probe took, on success and on failure alike
 }
 
 // History is everything remembered about one target. Its zero value is
