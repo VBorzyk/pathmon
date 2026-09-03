@@ -141,7 +141,7 @@ func (d *Detector) Check(target string, h state.History) *Event {
 // baseline computes the median connect time of the successful samples,
 // a robust scale around it, and how many points went into both.
 //
-// The scale is 1.4826*MAD with a floor of max(0.1*median, 1ms): on a
+// The scale is 1.4826*MAD with a floor of max(median/4, 1ms): on a
 // stable path MAD collapses to zero, and without the floor any jitter
 // would read as an infinite deviation.
 func baseline(window []state.Sample) (median, scale time.Duration, points int) {
@@ -168,7 +168,11 @@ func baseline(window []state.Sample) (median, scale time.Duration, points int) {
 	}
 	scale = time.Duration(1.4826 * float64(medianOf(deviations)))
 
-	if floor := median / 10; scale < floor {
+	// A quarter of the median keeps the alert bar at roughly "connect
+	// time doubled": with SlowK=4 the minimum threshold is 2*median.
+	// A tenth was tried first and produced noise on stable anchors,
+	// where a few extra milliseconds of jitter crossed the bar.
+	if floor := median / 4; scale < floor {
 		scale = floor
 	}
 	if scale < time.Millisecond {

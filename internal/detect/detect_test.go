@@ -118,6 +118,13 @@ func TestDetect(t *testing.T) {
 				ok(20*time.Millisecond)), // back to normal: recovered
 			want: []Type{TypeSlowConnect, TypeRecovered},
 		},
+		{
+			name: "small jitter on a stable anchor stays silent",
+			// Taken from a real overnight run: median 10.5ms, probe
+			// 15.2ms. With the old median/10 floor this fired.
+			samples: append(stableAnchor(), ok(15200*time.Microsecond)),
+			want:    nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -171,7 +178,19 @@ func TestBaselineFloor(t *testing.T) {
 	if median != 20*time.Millisecond {
 		t.Errorf("median = %v, want 20ms", median)
 	}
-	if want := 2 * time.Millisecond; scale != want { // 0.1 * median
+	if want := 5 * time.Millisecond; scale != want { // median/4
 		t.Errorf("scale = %v, want %v", scale, want)
+	}
+}
+
+// stableAnchor mimics a low-latency anchor like a public DNS resolver:
+// a tight baseline around 10.5ms where MAD is close to zero.
+func stableAnchor() []state.Sample {
+	return []state.Sample{
+		ok(10400 * time.Microsecond),
+		ok(10500 * time.Microsecond),
+		ok(10600 * time.Microsecond),
+		ok(10500 * time.Microsecond),
+		ok(10450 * time.Microsecond),
 	}
 }
