@@ -10,9 +10,15 @@ import (
 
 	"github.com/VBorzyk/pathmon/internal/config"
 	"github.com/VBorzyk/pathmon/internal/detect"
+	"github.com/VBorzyk/pathmon/internal/notify"
 	"github.com/VBorzyk/pathmon/internal/probe"
 	"github.com/VBorzyk/pathmon/internal/state"
 )
+
+// tokenEnv is the only place the Telegram bot token is read from. A flag
+// or a config key would expose it in /proc/*/cmdline, ps and docker
+// inspect to every user on the host.
+const tokenEnv = "PATHMON_TELEGRAM_TOKEN"
 
 // version is injected at build time via -ldflags (see Makefile).
 var version = "dev"
@@ -61,7 +67,12 @@ Commands:
 Flags for watch:
   -c, -config path    configuration file (default pathmon.yaml)
   -interval duration  override the interval from the config
-  -once               run a single round and exit`)
+  -once               run a single round and exit
+  -no-notify          print events but do not send them to Telegram
+
+Environment:
+  PATHMON_TELEGRAM_TOKEN   bot token; required when telegram.chat_id is set
+  HTTPS_PROXY              proxy for Telegram delivery (standard Go semantics)`)
 }
 
 // runWatch parses the flags of the watch command and then probes every
@@ -76,12 +87,14 @@ func runWatch(args []string) error {
 		path     string
 		interval time.Duration
 		once     bool
+		noNotify bool
 	)
 	// Registering the same variable twice is how stdlib flag does aliases.
 	fs.StringVar(&path, "c", config.DefaultPath, "configuration file")
 	fs.StringVar(&path, "config", config.DefaultPath, "configuration file")
 	fs.DurationVar(&interval, "interval", 0, "override the configured interval")
 	fs.BoolVar(&once, "once", false, "run a single round and exit")
+	fs.BoolVar(&noNotify, "no-notify", false, "print events but do not send them to Telegram")
 
 	if err := fs.Parse(args); err != nil {
 		printUsage()
@@ -106,8 +119,13 @@ func runWatch(args []string) error {
 		}
 	}
 
-	fmt.Printf("pathmon %s | host_id=%s | targets=%d | interval=%v\n\n",
-		version, cfg.HostID, len(cfg.Targets), cfg.Interval)
+	notifiers, telegram, err := buildNotifiers(cfg, noNotify)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("pathmon %s | host_id=%s | targets=%d | interval=%v | telegram=%s\n\n",
+		version, cfg.HostID, len(cfg.Targets), cfg.Interval, telegram)
 
 	// One history per target address, kept for the whole run. The map
 	// starts empty: a missing key reads as a zero History, which is valid.
@@ -117,7 +135,7 @@ func runWatch(args []string) error {
 	detector := detect.New()
 
 	if once {
-		runRound(cfg, histories, detector)
+		runRound(cfg, histories, detector, notifiers)
 		return nil
 	}
 
@@ -126,7 +144,7 @@ func runWatch(args []string) error {
 	// every cycle, so a 60s interval would slowly drift to 62s, 64s, ...
 	next := time.Now()
 	for {
-		runRound(cfg, histories, detector)
+		runRound(cfg, histories, detector, notifiers)
 
 		next = next.Add(cfg.Interval)
 		wait := time.Until(next)
@@ -140,11 +158,36 @@ func runWatch(args []string) error {
 	}
 }
 
+// buildNotifiers assembles the delivery chain. Stdout is always there;
+// Telegram joins when a chat_id is configured and -no-notify is not set.
+// The second return value is a short status word for the banner.
+func buildNotifiers(cfg config.Config, noNotify bool) ([]notify.Notifier, string, error) {
+	notifiers := []notify.Notifier{notify.NewStdout(os.Stdout)}
+
+	switch {
+	case !cfg.Telegram.Enabled():
+		return notifiers, "off", nil
+	case noNotify:
+		return notifiers, "muted", nil
+	}
+
+	token := os.Getenv(tokenEnv)
+	if token == "" {
+		// Failing here is deliberate: a configured chat with no token
+		// would run for hours silently sending nothing.
+		return nil, "", fmt.Errorf("telegram.chat_id is set but %s is empty", tokenEnv)
+	}
+	notifiers = append(notifiers, notify.NewTelegram(cfg.Telegram, token, cfg.HostID))
+	return notifiers, "on", nil
+}
+
 // runRound probes every target once, updates its history and prints one
-// line per target. One timestamp is taken for the whole round, so all its
-// lines line up.
-func runRound(cfg config.Config, histories map[string]state.History, detector *detect.Detector) {
-	stamp := time.Now().Format("15:04:05")
+// line per target, then hands the events of the round to every notifier.
+// One timestamp is taken for the whole round, so all its lines line up.
+func runRound(cfg config.Config, histories map[string]state.History, detector *detect.Detector, notifiers []notify.Notifier) {
+	now := time.Now()
+	stamp := now.Format("15:04:05")
+	var events []detect.Event
 
 	for _, target := range cfg.Targets {
 		address := target.Address()
@@ -170,12 +213,18 @@ func runRound(cfg config.Config, histories map[string]state.History, detector *d
 		fmt.Printf("%s  %-24s %-8s streak=%-3d loss=%d/%-3d %s\n",
 			stamp, address, status, h.Streak, lost, total, detail)
 
-		// Detected events get their own marked line right under the
-		// probe that triggered them; tomorrow the same events also go
-		// to Telegram.
 		if event := detector.Check(address, h); event != nil {
-			fmt.Printf("%s  %-24s !! %s: %s\n",
-				stamp, address, event.Type, event.Detail)
+			events = append(events, *event)
+		}
+	}
+
+	// Every notifier sees the whole round, even an empty one: Telegram
+	// uses empty rounds to retry a digest it failed to send. A delivery
+	// failure is reported and the loop goes on; the events happened
+	// whether or not anyone was told.
+	for _, n := range notifiers {
+		if err := n.Notify(now, events); err != nil {
+			fmt.Fprintf(os.Stderr, "%s  notify: %v\n", stamp, err)
 		}
 	}
 }

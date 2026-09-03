@@ -18,3 +18,15 @@ targets:
   # If the anchor fails too, the problem is on the observer side.
   - host: 1.1.1.1
     port: 443
+
+# Alerts. Telegram is off until chat_id is set; events always go to stdout.
+# The bot token is never read from this file: export PATHMON_TELEGRAM_TOKEN.
+telegram:
+  # chat_id: 123456789
+
+  # Bot API endpoint. Point it at a reverse proxy outside the observer's
+  # network when api.telegram.org is unreachable from here.
+  api_base: https://api.telegram.org
+
+  # Repeats of the same event on the same target are muted for this long.
+  cooldown: 15m
