@@ -15,6 +15,9 @@ import (
 // when no other path is given.
 const DefaultPath = "pathmon.yaml"
 
+// DefaultTelegramAPIBase is the public Bot API endpoint.
+const DefaultTelegramAPIBase = "https://api.telegram.org"
+
 // Target is a single host to probe.
 type Target struct {
 	Host string `yaml:"host"`
@@ -24,6 +27,26 @@ type Target struct {
 // Address returns the target in "host:port" form, ready for net.Dial.
 func (t Target) Address() string {
 	return net.JoinHostPort(t.Host, strconv.Itoa(t.Port))
+}
+
+// Telegram holds the alert delivery settings. The bot token is not here
+// on purpose: it comes only from the PATHMON_TELEGRAM_TOKEN environment
+// variable, so it never lands in a file that gets committed or in a
+// command line that anyone on the host can read.
+type Telegram struct {
+	// ChatID is the chat that receives alerts. Zero means Telegram is off.
+	ChatID int64 `yaml:"chat_id"`
+	// APIBase is the Bot API endpoint. The default is Telegram itself;
+	// point it at a reverse proxy when api.telegram.org is unreachable
+	// from the observer's network.
+	APIBase string `yaml:"api_base"`
+	// Cooldown suppresses repeats of the same event on the same target.
+	Cooldown time.Duration `yaml:"cooldown"`
+}
+
+// Enabled reports whether alerts should be sent to Telegram at all.
+func (t Telegram) Enabled() bool {
+	return t.ChatID != 0
 }
 
 // Config is the whole configuration file.
@@ -36,6 +59,8 @@ type Config struct {
 	Timeout time.Duration `yaml:"timeout"`
 	// Targets is the list of hosts to watch.
 	Targets []Target `yaml:"targets"`
+	// Telegram configures alert delivery; optional.
+	Telegram Telegram `yaml:"telegram"`
 }
 
 // Load reads the configuration file at path, fills in defaults
@@ -51,6 +76,10 @@ func Load(path string) (Config, error) {
 	cfg := Config{
 		Interval: 60 * time.Second,
 		Timeout:  2 * time.Second,
+		Telegram: Telegram{
+			APIBase:  DefaultTelegramAPIBase,
+			Cooldown: 15 * time.Minute,
+		},
 	}
 
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
@@ -106,6 +135,17 @@ func (cfg Config) Validate() error {
 		}
 		if t.Port < 1 || t.Port > 65535 {
 			return fmt.Errorf("target %d (%s): port %d is out of range 1-65535", i+1, t.Host, t.Port)
+		}
+	}
+
+	// Telegram settings are only checked when Telegram is in use:
+	// a config without a chat_id must keep loading exactly as before.
+	if cfg.Telegram.Enabled() {
+		if cfg.Telegram.APIBase == "" {
+			return fmt.Errorf("telegram.api_base is empty")
+		}
+		if cfg.Telegram.Cooldown < 0 {
+			return fmt.Errorf("telegram.cooldown must not be negative, got %v", cfg.Telegram.Cooldown)
 		}
 	}
 

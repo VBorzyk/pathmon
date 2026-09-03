@@ -98,3 +98,99 @@ func TestLoadMissingFile(t *testing.T) {
 		t.Error("expected an error for a missing file, got none")
 	}
 }
+
+func TestLoadTelegramDefaults(t *testing.T) {
+	path := writeConfig(t, `
+targets:
+  - host: 1.1.1.1
+telegram:
+  chat_id: 123456789
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !cfg.Telegram.Enabled() {
+		t.Fatalf("telegram should be enabled when chat_id is set")
+	}
+	if cfg.Telegram.ChatID != 123456789 {
+		t.Errorf("chat_id: got %d, want 123456789", cfg.Telegram.ChatID)
+	}
+	if cfg.Telegram.APIBase != DefaultTelegramAPIBase {
+		t.Errorf("api_base: got %q, want %q", cfg.Telegram.APIBase, DefaultTelegramAPIBase)
+	}
+	if cfg.Telegram.Cooldown != 15*time.Minute {
+		t.Errorf("cooldown: got %v, want 15m", cfg.Telegram.Cooldown)
+	}
+}
+
+func TestLoadTelegramOverrides(t *testing.T) {
+	path := writeConfig(t, `
+targets:
+  - host: 1.1.1.1
+telegram:
+  chat_id: -1001234567890
+  api_base: https://tg-relay.example.com
+  cooldown: 5m
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Telegram.ChatID != -1001234567890 {
+		t.Errorf("chat_id: got %d, want -1001234567890", cfg.Telegram.ChatID)
+	}
+	if cfg.Telegram.APIBase != "https://tg-relay.example.com" {
+		t.Errorf("api_base: got %q", cfg.Telegram.APIBase)
+	}
+	if cfg.Telegram.Cooldown != 5*time.Minute {
+		t.Errorf("cooldown: got %v, want 5m", cfg.Telegram.Cooldown)
+	}
+}
+
+func TestLoadWithoutTelegramIsDisabled(t *testing.T) {
+	path := writeConfig(t, `
+targets:
+  - host: 1.1.1.1
+`)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Telegram.Enabled() {
+		t.Errorf("telegram should be disabled when chat_id is absent")
+	}
+}
+
+func TestLoadRejectsBadTelegram(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"negative cooldown", `
+targets:
+  - host: 1.1.1.1
+telegram:
+  chat_id: 1
+  cooldown: -1m
+`},
+		{"empty api_base", `
+targets:
+  - host: 1.1.1.1
+telegram:
+  chat_id: 1
+  api_base: ""
+`},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Load(writeConfig(t, tc.body)); err == nil {
+				t.Errorf("expected an error, got nil")
+			}
+		})
+	}
+}
