@@ -194,3 +194,29 @@ telegram:
 		})
 	}
 }
+
+func TestLoadJournal(t *testing.T) {
+	off, err := Load(writeConfig(t, "targets:\n  - host: 1.1.1.1\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if off.Journal.Enabled() {
+		t.Errorf("journal should be off when path is absent, got %q", off.Journal.Path)
+	}
+
+	on, err := Load(writeConfig(t, `
+targets:
+  - host: 1.1.1.1
+journal:
+  path: /var/lib/pathmon/events.jsonl
+`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !on.Journal.Enabled() {
+		t.Fatalf("journal should be enabled when path is set")
+	}
+	if on.Journal.Path != "/var/lib/pathmon/events.jsonl" {
+		t.Errorf("path: got %q", on.Journal.Path)
+	}
+}
