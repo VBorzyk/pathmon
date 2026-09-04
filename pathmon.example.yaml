@@ -30,3 +30,10 @@ telegram:
 
   # Repeats of the same event on the same target are muted for this long.
   cooldown: 15m
+
+# Event journal: one JSON object per line, every event, no cooldown.
+# This is the complete record; the chat is only what people need to read.
+# Remove the path (or the section) to turn it off. Read it back with
+# "pathmon history" or with jq.
+journal:
+  path: pathmon.jsonl

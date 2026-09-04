@@ -49,6 +49,19 @@ func (t Telegram) Enabled() bool {
 	return t.ChatID != 0
 }
 
+// Journal holds the event journal settings. The journal is the reliable
+// record: every event lands there, with no cooldown and no batching,
+// while a chat only sees what people need to read.
+type Journal struct {
+	// Path is the NDJSON file events are appended to. Empty means off.
+	Path string `yaml:"path"`
+}
+
+// Enabled reports whether events should be written to a journal file.
+func (j Journal) Enabled() bool {
+	return j.Path != ""
+}
+
 // Config is the whole configuration file.
 type Config struct {
 	// HostID tags every alert so you can tell observers apart.
@@ -61,6 +74,8 @@ type Config struct {
 	Targets []Target `yaml:"targets"`
 	// Telegram configures alert delivery; optional.
 	Telegram Telegram `yaml:"telegram"`
+	// Journal configures the on-disk event record; optional.
+	Journal Journal `yaml:"journal"`
 }
 
 // Load reads the configuration file at path, fills in defaults
