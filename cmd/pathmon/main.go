@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/VBorzyk/pathmon/internal/config"
@@ -40,6 +41,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "pathmon:", err)
 			os.Exit(1)
 		}
+	case "history":
+		if err := runHistory(args); err != nil {
+			fmt.Fprintln(os.Stderr, "pathmon:", err)
+			os.Exit(1)
+		}
 	case "version":
 		fmt.Println("pathmon", version)
 	case "help":
@@ -61,6 +67,7 @@ Usage:
 
 Commands:
   watch     run continuous monitoring
+  history   print events from the journal
   version   print version information
   help      show this help
 
@@ -69,6 +76,12 @@ Flags for watch:
   -interval duration  override the interval from the config
   -once               run a single round and exit
   -no-notify          print events but do not send them to Telegram
+
+Flags for history:
+  -c, -config path    configuration file (default pathmon.yaml)
+  -target host:port   only events for this target
+  -since duration     only events newer than this (e.g. 24h)
+  -n count            only the last N matching events
 
 Environment:
   PATHMON_TELEGRAM_TOKEN   bot token; required when telegram.chat_id is set
@@ -119,13 +132,35 @@ func runWatch(args []string) error {
 		}
 	}
 
-	notifiers, telegram, err := buildNotifiers(cfg, noNotify)
+	// Delivery chain, in the order events flow through it: the screen,
+	// then the record on disk, then the chat. The journal comes before
+	// Telegram so that an event is written down before anyone tries to
+	// send it anywhere.
+	notifiers := []notify.Notifier{notify.NewStdout(os.Stdout)}
+
+	journal := "off"
+	if cfg.Journal.Enabled() {
+		j, err := notify.OpenJournal(cfg.Journal.Path, cfg.HostID)
+		if err != nil {
+			return err
+		}
+		// defer runs when runWatch returns: after -once, or never for
+		// the endless loop, where the OS closes the file on exit.
+		defer j.Close()
+		notifiers = append(notifiers, j)
+		journal = cfg.Journal.Path
+	}
+
+	telegramNotifier, telegram, err := buildTelegram(cfg, noNotify)
 	if err != nil {
 		return err
 	}
+	if telegramNotifier != nil {
+		notifiers = append(notifiers, telegramNotifier)
+	}
 
-	fmt.Printf("pathmon %s | host_id=%s | targets=%d | interval=%v | telegram=%s\n\n",
-		version, cfg.HostID, len(cfg.Targets), cfg.Interval, telegram)
+	fmt.Printf("pathmon %s | host_id=%s | targets=%d | interval=%v | journal=%s | telegram=%s\n\n",
+		version, cfg.HostID, len(cfg.Targets), cfg.Interval, journal, telegram)
 
 	// One history per target address, kept for the whole run. The map
 	// starts empty: a missing key reads as a zero History, which is valid.
@@ -158,17 +193,19 @@ func runWatch(args []string) error {
 	}
 }
 
-// buildNotifiers assembles the delivery chain. Stdout is always there;
-// Telegram joins when a chat_id is configured and -no-notify is not set.
-// The second return value is a short status word for the banner.
-func buildNotifiers(cfg config.Config, noNotify bool) ([]notify.Notifier, string, error) {
-	notifiers := []notify.Notifier{notify.NewStdout(os.Stdout)}
-
+// buildTelegram returns the Telegram notifier when a chat_id is
+// configured and -no-notify is not set, and nil otherwise. The second
+// return value is a short status word for the banner.
+//
+// The return type is the interface, not *notify.Telegram: a nil pointer
+// stored in an interface is not a nil interface, and the caller's
+// "!= nil" check would pass and then call Notify on nothing.
+func buildTelegram(cfg config.Config, noNotify bool) (notify.Notifier, string, error) {
 	switch {
 	case !cfg.Telegram.Enabled():
-		return notifiers, "off", nil
+		return nil, "off", nil
 	case noNotify:
-		return notifiers, "muted", nil
+		return nil, "muted", nil
 	}
 
 	token := os.Getenv(tokenEnv)
@@ -177,8 +214,7 @@ func buildNotifiers(cfg config.Config, noNotify bool) ([]notify.Notifier, string
 		// would run for hours silently sending nothing.
 		return nil, "", fmt.Errorf("telegram.chat_id is set but %s is empty", tokenEnv)
 	}
-	notifiers = append(notifiers, notify.NewTelegram(cfg.Telegram, token, cfg.HostID))
-	return notifiers, "on", nil
+	return notify.NewTelegram(cfg.Telegram, token, cfg.HostID), "on", nil
 }
 
 // runRound probes every target once, updates its history and prints one
@@ -227,4 +263,84 @@ func runRound(cfg config.Config, histories map[string]state.History, detector *d
 			fmt.Fprintf(os.Stderr, "%s  notify: %v\n", stamp, err)
 		}
 	}
+}
+
+// runHistory prints events recorded in the journal, newest last, with
+// optional filters. It reads the journal path from the same config
+// watch uses, so the two commands never disagree about the file.
+func runHistory(args []string) error {
+	fs := flag.NewFlagSet("history", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+
+	var (
+		path   string
+		target string
+		since  time.Duration
+		last   int
+	)
+	fs.StringVar(&path, "c", config.DefaultPath, "configuration file")
+	fs.StringVar(&path, "config", config.DefaultPath, "configuration file")
+	fs.StringVar(&target, "target", "", "only events for this target (host:port)")
+	fs.DurationVar(&since, "since", 0, "only events newer than this duration")
+	fs.IntVar(&last, "n", 0, "only the last N matching events")
+
+	if err := fs.Parse(args); err != nil {
+		printUsage()
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return fmt.Errorf("invalid flags: %w", err)
+	}
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	if !cfg.Journal.Enabled() {
+		return fmt.Errorf("journal.path is not set in %s: nothing to read", path)
+	}
+
+	f, err := os.Open(cfg.Journal.Path)
+	if err != nil {
+		return fmt.Errorf("open journal: %w", err)
+	}
+	defer f.Close()
+
+	records, skipped, err := notify.ReadRecords(f)
+	if err != nil {
+		return err
+	}
+	if skipped > 0 {
+		// Loud but not fatal: the rest of the file is still useful.
+		fmt.Fprintf(os.Stderr, "pathmon: %d unreadable line(s) skipped in %s\n", skipped, cfg.Journal.Path)
+	}
+
+	// Filters are applied in memory: the journal is small (one line per
+	// event, not per probe) and this keeps the read path a single pass.
+	cutoff := time.Time{}
+	if since > 0 {
+		cutoff = time.Now().Add(-since)
+	}
+	var matched []notify.Record
+	for _, r := range records {
+		if target != "" && r.Target != target {
+			continue
+		}
+		if r.Time.Before(cutoff) {
+			continue
+		}
+		matched = append(matched, r)
+	}
+	if last > 0 && len(matched) > last {
+		matched = matched[len(matched)-last:]
+	}
+
+	// Times are stored in UTC and shown in local time, the same clock
+	// the watch output uses, so an event is easy to find in both.
+	for _, r := range matched {
+		fmt.Printf("%s  %-14s %-24s %-12s %s\n",
+			r.Time.Local().Format("2006-01-02 15:04:05"),
+			r.HostID, r.Target, r.Event, strings.TrimSpace(r.Detail))
+	}
+	return nil
 }
