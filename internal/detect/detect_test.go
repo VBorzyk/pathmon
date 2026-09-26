@@ -1,6 +1,7 @@
 package detect
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -41,6 +42,12 @@ func stable() []state.Sample {
 
 func TestDetect(t *testing.T) {
 	timeout := state.Sample{Status: probe.StatusTimeout}
+	// Follow the same classification path as a real failed DNS lookup.
+	dnsTimeout := state.Sample{Status: probe.Classify(&net.OpError{
+		Op:  "dial",
+		Net: "tcp",
+		Err: &net.DNSError{Err: "i/o timeout", Name: "example.com", IsTimeout: true},
+	})}
 
 	tests := []struct {
 		name    string
@@ -57,6 +64,18 @@ func TestDetect(t *testing.T) {
 			samples: append(stable(),
 				timeout,
 				ok(20*time.Millisecond)),
+			want: nil,
+		},
+		{
+			name: "DNS timeouts do not trigger a blackhole",
+			samples: append(stable(),
+				dnsTimeout, dnsTimeout, dnsTimeout, dnsTimeout, dnsTimeout),
+			want: nil,
+		},
+		{
+			name: "DNS error interrupts a TCP timeout series",
+			samples: append(stable(),
+				timeout, timeout, dnsTimeout, timeout, timeout, timeout),
 			want: nil,
 		},
 		{
