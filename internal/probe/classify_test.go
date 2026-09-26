@@ -23,6 +23,39 @@ func TestClassifyTimeout(t *testing.T) {
 	}
 }
 
+func TestClassifyDNS(t *testing.T) {
+	timeout := &net.DNSError{
+		Err:       "i/o timeout",
+		Name:      "example.com",
+		IsTimeout: true,
+	}
+	notFound := &net.DNSError{
+		Err:        "no such host",
+		Name:       "example.invalid",
+		IsNotFound: true,
+	}
+	dialTimeout := &net.OpError{Op: "dial", Net: "tcp", Err: timeout}
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{"DNS timeout", timeout},
+		{"DNS timeout inside dial error", dialTimeout},
+		{"DNS timeout inside multiple wrappers", fmt.Errorf("probe failed: %w", dialTimeout)},
+		{"name not found", notFound},
+		{"name not found inside dial error", &net.OpError{Op: "dial", Net: "tcp", Err: notFound}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Classify(tt.err); got != StatusError {
+				t.Errorf("Classify(%v) = %q, want %q", tt.err, got, StatusError)
+			}
+		})
+	}
+}
+
 // A closed port on localhost answers with RST at once, which is exactly
 // the "refused" case, and it needs no network.
 func TestClassifyRefused(t *testing.T) {

@@ -1,0 +1,35 @@
+[Unit]
+Description=Pathmon TCP reachability monitor
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pathmon
+Group=pathmon
+
+# systemd creates /var/lib/pathmon and makes it writable by pathmon.
+StateDirectory=pathmon
+StateDirectoryMode=0750
+WorkingDirectory=/var/lib/pathmon
+
+# Optional when Telegram is disabled. This file uses KEY=value, not export.
+EnvironmentFile=-/etc/pathmon/pathmon.env
+ExecStart=/usr/local/bin/pathmon watch -config /etc/pathmon/pathmon.yaml
+
+Restart=on-failure
+RestartSec=5s
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=pathmon
+
+# TCP connect probes need no elevated privileges.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+UMask=0027
+
+[Install]
+WantedBy=multi-user.target

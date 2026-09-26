@@ -12,8 +12,8 @@ type Status string
 
 const (
 	StatusOK      Status = "ok"      // handshake completed
-	StatusTimeout Status = "timeout" // no reply before the deadline: silence on the path
-	StatusRefused Status = "refused" // the peer replied with RST: the host is up, nothing listens
+	StatusTimeout Status = "timeout" // deadline exceeded; excludes known DNS errors
+	StatusRefused Status = "refused" // connection refused; does not identify who rejected it
 	StatusError   Status = "error"   // anything else: DNS failure, no route, ...
 )
 
@@ -24,8 +24,15 @@ func Classify(err error) Status {
 		return StatusOK
 	}
 
-	// Every error from the net package implements net.Error, which can
-	// tell a timeout apart from other failures without looking at text.
+	// DNS errors can also report Timeout() == true. Check them first:
+	// a failed lookup must not become evidence of a TCP blackhole.
+	// Dial wraps the cause in *net.OpError; errors.As looks through it.
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return StatusError
+	}
+
+	// Classify the remaining timeouts without depending on error text.
 	var netErr net.Error
 	if errors.As(err, &netErr) && netErr.Timeout() {
 		return StatusTimeout
